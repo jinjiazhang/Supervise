@@ -14,6 +14,7 @@ private struct StartView: View {
     @State private var exercise: Exercise = .rope
     @AppStorage("ropeTarget") private var ropeTarget = 30
     @AppStorage("riseTarget") private var riseTarget = 10
+    @AppStorage("riseHoldSeconds") private var holdSeconds = MotionCounter.defaultHoldSeconds
     @AppStorage("voiceOn") private var spoken = true
     @State private var practicing = false
 
@@ -56,6 +57,12 @@ private struct StartView: View {
                             Stepper("目标次数", value: target, in: 5...200, step: 5)
                                 .labelsHidden().colorScheme(.dark)
                         }
+                        if exercise == .rise {
+                            Divider().overlay(.white.opacity(0.35))
+                            Stepper(value: $holdSeconds, in: MotionCounter.holdRange) {
+                                Text("每次保持 " + String(holdSeconds) + " 秒").font(.headline)
+                            }.colorScheme(.dark)
+                        }
                     }
                     .padding(22).foregroundStyle(.white).background(ink, in: RoundedRectangle(cornerRadius: 24))
                     VStack(alignment: .leading, spacing: 14) {
@@ -76,7 +83,7 @@ private struct StartView: View {
         }
         .foregroundStyle(ink).background(paper).buttonStyle(.plain)
         .fullScreenCover(isPresented: $practicing) {
-            PracticeView(exercise, target: target.wrappedValue, spoken: spoken)
+            PracticeView(exercise, target: target.wrappedValue, spoken: spoken, holdSeconds: holdSeconds)
         }
     }
 }
@@ -94,8 +101,8 @@ private struct PracticeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    init(_ exercise: Exercise, target: Int, spoken: Bool) {
-        _workout = StateObject(wrappedValue: Workout(exercise, target: target, spoken: spoken))
+    init(_ exercise: Exercise, target: Int, spoken: Bool, holdSeconds: Int) {
+        _workout = StateObject(wrappedValue: Workout(exercise, target: target, spoken: spoken, holdSeconds: holdSeconds))
     }
 
     var body: some View {

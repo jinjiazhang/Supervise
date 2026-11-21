@@ -7,6 +7,7 @@ final class Workout: ObservableObject {
 
     let exercise: Exercise
     let target: Int
+    let holdSeconds: Int
     let camera = PracticeCamera()
     @Published private(set) var phase = Phase.preparing
     @Published private(set) var message = "正在打开摄像头"
@@ -15,15 +16,19 @@ final class Workout: ObservableObject {
     private var counter: MotionCounter
     private var generation = 0
     private var missingSince: Double?
+    private var previousEvent: MotionEvent?
+    private var eventSince = 0.0
+    private var showResultUntil = 0.0
     private var lastReminder = -Double.infinity
     private let voice = AVSpeechSynthesizer()
     let spoken: Bool
 
-    init(_ exercise: Exercise, target: Int, spoken: Bool) {
+    init(_ exercise: Exercise, target: Int, spoken: Bool, holdSeconds: Int) {
         self.exercise = exercise
         self.target = target
+        self.holdSeconds = holdSeconds
         self.spoken = spoken
-        counter = MotionCounter(exercise)
+        counter = MotionCounter(exercise, holdSeconds: holdSeconds)
     }
 
     func begin() async {
@@ -35,6 +40,8 @@ final class Workout: ObservableObject {
         counter.recalibrate()
         missingSince = nil
         lastReminder = -.infinity
+        previousEvent = nil
+        showResultUntil = 0
         var allowed = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
             allowed = await AVCaptureDevice.requestAccess(for: .video)
@@ -68,6 +75,11 @@ final class Workout: ObservableObject {
 
     private func process(_ body: Body, time: Double) {
         let event = counter.update(body, at: time)
+        let changed = previousEvent != event
+        if changed {
+            previousEvent = event
+            eventSince = time
+        }
         if event != .missing { missingSince = nil }
         switch event {
         case .missing:
@@ -86,10 +98,24 @@ final class Workout: ObservableObject {
         case .ready:
             phase = .active
             message = "可以开始了"
-            say("准备好了，开始")
+            say(exercise == .rise ? "开始，每次保持" + String(holdSeconds) + "秒" : "准备好了，开始")
         case .raised:
-            message = exercise == .rise ? "已抬起，放下脚跟" : "已起跳"
+            message = "已起跳"
+        case .holding(let secondsLeft):
+            message = "继续保持，还剩 " + String(secondsLeft) + " 秒"
+        case .lowerHeel:
+            message = "保持完成，慢慢放下脚跟"
+            if changed { say(message) }
+        case .correction(let issue):
+            message = issue.rawValue
+            // Allow the normal ascent through lower heel heights before coaching.
+            if time - eventSince >= 0.5 { remind(issue, at: time) }
+        case .rejected(let issue):
+            message = issue.rawValue
+            showResultUntil = time + 1.5
+            remind(issue, at: time)
         case .tracking:
+            guard time >= showResultUntil else { break }
             message = exercise == .rise ? "站稳后踮起脚跟" : "跟着自己的节奏跳"
         case .counted:
             count = counter.count
@@ -97,6 +123,12 @@ final class Workout: ObservableObject {
             if count >= target { finish() }
             else if exercise == .rise || count.isMultiple(of: 10) { say(String(count)) }
         }
+    }
+
+    private func remind(_ issue: RiseCorrection, at time: Double) {
+        guard time - lastReminder >= 3 else { return }
+        say(issue.rawValue)
+        lastReminder = time
     }
 
     func pause() {

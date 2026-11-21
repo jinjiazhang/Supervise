@@ -80,7 +80,12 @@ final class PracticeCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             let image = try MPImage(sampleBuffer: buffer)
             let result = try detector.detect(videoFrame: image, timestampInMilliseconds: stamp)
             let points = result.landmarks.first ?? []
-            let body = Body(left: Self.leg(points, side: 0), right: Self.leg(points, side: 1))
+            guard let pixels = CMSampleBufferGetImageBuffer(buffer) else {
+                onBody(Body(), Double(stamp) / 1000)
+                return
+            }
+            let size = CGSize(width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
+            let body = Body(left: Self.leg(points, side: 0, size: size), right: Self.leg(points, side: 1, size: size))
             consecutiveErrors = 0
             onBody(body, Double(stamp) / 1000)
         } catch {
@@ -90,14 +95,22 @@ final class PracticeCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
     }
 
-    private static func leg(_ points: [NormalizedLandmark], side: Int) -> Leg? {
+    private static func leg(_ points: [NormalizedLandmark], side: Int, size: CGSize) -> Leg? {
         guard points.count >= 33 else { return nil }
         let joints = [23, 27, 29, 31].map { points[$0 + side] }
         guard joints.allSatisfy({ (0.01...0.99).contains($0.x) && (0.01...0.99).contains($0.y) }) else { return nil }
         let quality = joints.map { min($0.visibility?.doubleValue ?? 0, $0.presence?.doubleValue ?? 1) }.min() ?? 0
         guard quality >= 0.52 else { return nil }
+        let knee = points[25 + side]
+        let kneeVisible = (0.01...0.99).contains(knee.x) && (0.01...0.99).contains(knee.y)
+            && min(knee.visibility?.doubleValue ?? 0, knee.presence?.doubleValue ?? 1) >= 0.52
+        func pixelPoint(_ joint: NormalizedLandmark) -> CGPoint {
+            CGPoint(x: CGFloat(joint.x) * size.width, y: CGFloat(joint.y) * size.height)
+        }
+        let kneeAngle = kneeVisible ? Leg.angle(hip: pixelPoint(joints[0]), knee: pixelPoint(knee),
+                                               ankle: pixelPoint(joints[1])) : nil
         return Leg(hip: Double(joints[0].y), ankle: Double(joints[1].y),
-                   heel: Double(joints[2].y), toe: Double(joints[3].y), quality: quality)
+                   heel: Double(joints[2].y), toe: Double(joints[3].y), quality: quality, kneeAngle: kneeAngle)
     }
 }
 
